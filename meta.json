@@ -1,0 +1,28 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "walicki:sy50updater",
+  "visibility": "public",
+  "url": "",
+  "description": "Modular generic component: SY50-updater",
+  "models": [
+    {
+      "api": "rdk:component:generic",
+      "model": "walicki:sy50updater:SY50-updater",
+      "short_description": "Prompt user to update Simrad SY50",
+      "markdown_link": "README.md#model-walickisy50updatersy50-updater"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "./bin/sy50updater.exe",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "bin/module.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }
+}
