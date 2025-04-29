@@ -3,12 +3,12 @@
   "module_id": "walicki:sy50updater",
   "visibility": "public_unlisted",  
   "url": "https://github.com/johnwalicki/viam-simrad-sy50updater",
-  "description": "Modular generic component: SY50-updater",
+  "description": "Modular sensor component: SY50-updater",
   "models": [
     {
-      "api": "rdk:component:generic",
+      "api": "rdk:component:sensor",
       "model": "walicki:sy50updater:SY50-updater",
-      "short_description": "Prompt user to update Simrad SY50",
+      "short_description": "Query the Simrad SY50 version and prompt user to update their Simrad SY50",
       "markdown_link": "README.md#model-walickisy50updatersy50-updater"
     }
   ],
