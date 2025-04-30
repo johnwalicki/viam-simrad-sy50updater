@@ -32,20 +32,8 @@ func init() {
 }
 
 type sensorConfig struct {
-	/*
-		Put config attributes here. There should be public/exported fields
-		with a `json` parameter at the end of each attribute.
-
-		Example config struct:
-			type Config struct {
-				Pin   string `json:"pin"`
-				Board string `json:"board"`
-				MinDeg *float64 `json:"min_angle_deg,omitempty"`
-			}
-
-		If your model does not need a config, replace *Config in the init
-		function with resource.NoNativeConfig
-	*/
+	DownloadURL   string `json:"download_url"`
+	versionTarget string `json:"version_target"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -56,6 +44,7 @@ func (cfg *sensorConfig) Validate(path string) ([]string, error) {
 	// Add config validation code here
 	return nil, nil
 }
+
 
 type sy50updaterSy50Updater struct {
 	resource.AlwaysRebuild
@@ -69,6 +58,7 @@ type sy50updaterSy50Updater struct {
 	cancelFunc func()
 }
 
+
 func newSy50updaterSy50Updater(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (sensor.Sensor, error) {
 	conf, err := resource.NativeConfig[*sensorConfig](rawConf)
 	if err != nil {
@@ -76,8 +66,8 @@ func newSy50updaterSy50Updater(ctx context.Context, deps resource.Dependencies, 
 	}
 
 	return NewSy50Updater(ctx, deps, rawConf.ResourceName(), conf, logger)
-
 }
+
 
 func NewSy50Updater(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *sensorConfig, logger logging.Logger) (sensor.Sensor, error) {
 
@@ -93,16 +83,18 @@ func NewSy50Updater(ctx context.Context, deps resource.Dependencies, name resour
 	return s, nil
 }
 
+
 func (s *sy50updaterSy50Updater) Name() resource.Name {
 	return s.name
 }
+
 
 func (s *sy50updaterSy50Updater) NewClientFromConn(ctx context.Context, conn rpc.ClientConn, remoteName string, name resource.Name, logger logging.Logger) (sensor.Sensor, error) {
 	return nil, errUnimplemented
 }
 
-func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 
+func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	// Find the Simrad SY50 version in the Windows Registry
 	programName := "Simrad SY50"
 	version, err := getWindowsProgramVersion(programName)
@@ -111,10 +103,12 @@ func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]
 		version = "Not installed"
 	}
 
+	s.logger.Infof("Simrad SY50 version details: %s", version)
 	return map[string]interface{}{
 		"Simrad SY50 version": version,
 	}, nil
 }
+
 
 func (s *sy50updaterSy50Updater) Close(context.Context) error {
 	// Put close code here
@@ -122,54 +116,50 @@ func (s *sy50updaterSy50Updater) Close(context.Context) error {
 	return nil
 }
 
-func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw
 
+func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	var strCaption string
 	var strText string
 	// Find the Simrad SY50 version in the Windows Registry
 	programName := "Simrad SY50"
 	version, err := getWindowsProgramVersion(programName)
+
+	s.logger.Infof("Comparing Simrad SY50 installed version %s with desired version %s", version, s.cfg.versionTarget)
 	if err != nil {
-		// Not installed or not found
+		// Simrad SY50 not installed or not found in Windows Registry
 		strCaption = "Install Simrad SY50"
 		strText = "Would you like to download and install the latest Simrad SY50 update?"
 	} else {
 		strCaption = "Simrad SY50 Update Available"
-		strText = fmt.Sprintf("Simrad SY50 %s is installed but an update is available.\n\nWould you like to download and install the latest Simrad SY50 update?", version)
+		strText = fmt.Sprintf("Simrad SY50 %s is installed but an %s update is available.\n\nWould you like to download and install the latest Simrad SY50 update?", version, s.cfg.versionTarget)
 	}
 
 	notification := toast.Notification{
-		AppID:   "Simrad SY50 Installer", // Replace with your application name
+		AppID:   "Simrad SY50 Installer",
 		Title:   strCaption,
 		Message: strText,
 		Actions: []toast.Action{
-			{Type: "action", Label: "Yes", Arguments: "yes"}, // Optional actions
-			{Type: "action", Label: "No", Arguments: "no"},
-			{Type: "action", Label: "Cancel", Arguments: "cancel"},
+			{Type: "protocol", Label: "Yes",     Arguments: "https://app.viam.com/"}, // Protocol handler will invoke the default browser
+			{Type: "protocol", Label: "No",      Arguments: ""},
+			{Type: "protocol", Label: "Dismiss", Arguments: ""},
 		},
-		Duration: "long", // or toast.DurationLong
+		Duration: "long",
 	}
 
+	s.logger.Info("Calling Windows Toast notification...")
 	errToast := notification.Push()
 	if errToast != nil {
-		//
+		s.logger.Errorf("error while pushing toast: %v", errToast)
 	}
 	time.Sleep(10 * time.Second)
-	/*
-		var retstr string
-		if clickBtnValue == IDYES {
-			retstr = fmt.Sprintf("Simrad SY50 %s is installed. The user clicked Yes", version)
-		} else if clickBtnValue == IDNO {
-			retstr = fmt.Sprintf("Simrad SY50 %s is installed. The user clicked No", version)
-		} else if clickBtnValue == IDCANCEL {
-			retstr = fmt.Sprintf("Simrad SY50 %s is installed. The user clicked Cancel", version)
-		}
-	*/
+
+	strText = fmt.Sprintf("error while pushing toast: %v", errToast)
+
 	return map[string]interface{}{
 		"Simrad SY50 PopUp ": strText,
 	}, nil
 }
+
 
 func (s *sy50updaterSy50Updater) DoCommandOld(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw
@@ -242,6 +232,7 @@ func (s *sy50updaterSy50Updater) DoCommandOld(ctx context.Context, cmd map[strin
 		"Simrad SY50 PopUp ": retstr,
 	}, nil
 }
+
 
 func getWindowsProgramVersion(programName string) (string, error) {
 	var subkey string
