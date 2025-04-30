@@ -7,6 +7,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"gopkg.in/toast.v1"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +34,8 @@ func init() {
 
 type sensorConfig struct {
 	DownloadURL   string `json:"download_url"`
-	versionTarget string `json:"version_target"`
+	VersionTarget string `json:"version_target"`
+	UserPrompt    bool   `json:"prompt"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -44,7 +46,6 @@ func (cfg *sensorConfig) Validate(path string) ([]string, error) {
 	// Add config validation code here
 	return nil, nil
 }
-
 
 type sy50updaterSy50Updater struct {
 	resource.AlwaysRebuild
@@ -58,7 +59,6 @@ type sy50updaterSy50Updater struct {
 	cancelFunc func()
 }
 
-
 func newSy50updaterSy50Updater(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (sensor.Sensor, error) {
 	conf, err := resource.NativeConfig[*sensorConfig](rawConf)
 	if err != nil {
@@ -68,9 +68,7 @@ func newSy50updaterSy50Updater(ctx context.Context, deps resource.Dependencies, 
 	return NewSy50Updater(ctx, deps, rawConf.ResourceName(), conf, logger)
 }
 
-
 func NewSy50Updater(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *sensorConfig, logger logging.Logger) (sensor.Sensor, error) {
-
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
 	s := &sy50updaterSy50Updater{
@@ -80,19 +78,17 @@ func NewSy50Updater(ctx context.Context, deps resource.Dependencies, name resour
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
+
 	return s, nil
 }
-
 
 func (s *sy50updaterSy50Updater) Name() resource.Name {
 	return s.name
 }
 
-
 func (s *sy50updaterSy50Updater) NewClientFromConn(ctx context.Context, conn rpc.ClientConn, remoteName string, name resource.Name, logger logging.Logger) (sensor.Sensor, error) {
 	return nil, errUnimplemented
 }
-
 
 func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	// Find the Simrad SY50 version in the Windows Registry
@@ -109,57 +105,74 @@ func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]
 	}, nil
 }
 
-
 func (s *sy50updaterSy50Updater) Close(context.Context) error {
 	// Put close code here
 	s.cancelFunc()
 	return nil
 }
 
-
 func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	var strCaption string
 	var strText string
+	var invokeWindowsUpdater = false
+
 	// Find the Simrad SY50 version in the Windows Registry
 	programName := "Simrad SY50"
 	version, err := getWindowsProgramVersion(programName)
-
-	s.logger.Infof("Comparing Simrad SY50 installed version %s with desired version %s", version, s.cfg.versionTarget)
 	if err != nil {
 		// Simrad SY50 not installed or not found in Windows Registry
 		strCaption = "Install Simrad SY50"
-		strText = "Would you like to download and install the latest Simrad SY50 update?"
+		strText = fmt.Sprintf("Would you like to download and install the latest Simrad SY50 %s update?", s.cfg.VersionTarget)
+		version = ""
+		invokeWindowsUpdater = true
 	} else {
-		strCaption = "Simrad SY50 Update Available"
-		strText = fmt.Sprintf("Simrad SY50 %s is installed but an %s update is available.\n\nWould you like to download and install the latest Simrad SY50 update?", version, s.cfg.versionTarget)
+		s.logger.Infof("Comparing Simrad SY50 installed version %s with desired version %s", version, s.cfg.VersionTarget)
+
+		// Compare the currently installed version of Simrad SY50 to the target version
+		if IsVersionTargetGreater(version, s.cfg.VersionTarget) {
+			strCaption = "Simrad SY50 Update Available"
+			strText = fmt.Sprintf("Simrad SY50 %s is installed but an %s update is available.\n\nWould you like to download and install the latest Simrad SY50 update?", version, s.cfg.VersionTarget)
+			invokeWindowsUpdater = true
+		} else {
+			strCaption = "No Simrad SY50 update required"
+			strText = fmt.Sprintf("Simrad SY50 %s is installed and is the current version. No upgrade is required.", version)
+		}
+		s.logger.Info(strCaption)
+		s.logger.Info(strText)
 	}
 
-	notification := toast.Notification{
-		AppID:   "Simrad SY50 Installer",
-		Title:   strCaption,
-		Message: strText,
-		Actions: []toast.Action{
-			{Type: "protocol", Label: "Yes",     Arguments: "https://app.viam.com/"}, // Protocol handler will invoke the default browser
-			{Type: "protocol", Label: "No",      Arguments: ""},
-			{Type: "protocol", Label: "Dismiss", Arguments: ""},
-		},
-		Duration: "long",
-	}
+	if invokeWindowsUpdater {
+		if s.cfg.UserPrompt == true {
+			notification := toast.Notification{
+				AppID:   "Simrad SY50 Installer",
+				Title:   strCaption,
+				Message: strText,
+				Actions: []toast.Action{
+					{Type: "protocol", Label: "Yes", Arguments: "https://app.viam.com/"}, // Protocol handler will invoke the default browser
+					{Type: "protocol", Label: "No", Arguments: ""},
+					{Type: "protocol", Label: "Dismiss", Arguments: ""},
+				},
+				Duration: "long",
+			}
 
-	s.logger.Info("Calling Windows Toast notification...")
-	errToast := notification.Push()
-	if errToast != nil {
-		s.logger.Errorf("error while pushing toast: %v", errToast)
-	}
-	time.Sleep(10 * time.Second)
+			s.logger.Info("Calling Windows Toast notification...")
+			errToast := notification.Push()
+			if errToast != nil {
+				s.logger.Errorf("error while pushing toast: %v", errToast)
+			}
+			time.Sleep(10 * time.Second)
 
-	strText = fmt.Sprintf("error while pushing toast: %v", errToast)
+			strText = fmt.Sprintf("error while pushing toast: %v", errToast)
+		}
+
+		// Call the generic windows-updater module DoCommand with the appropriate config attributes
+		s.logger.Info("Call the generic windows-updater module DoCommand with the appropriate config attributes")
+	}
 
 	return map[string]interface{}{
-		"Simrad SY50 PopUp ": strText,
+		"Simrad sy50updater DoCommand exit:": strText,
 	}, nil
 }
-
 
 func (s *sy50updaterSy50Updater) DoCommandOld(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw
@@ -233,7 +246,6 @@ func (s *sy50updaterSy50Updater) DoCommandOld(ctx context.Context, cmd map[strin
 	}, nil
 }
 
-
 func getWindowsProgramVersion(programName string) (string, error) {
 	var subkey string
 
@@ -275,4 +287,33 @@ func getWindowsProgramVersion(programName string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("program '%s' not found or version information unavailable", programName)
+}
+
+// IsVersionTargetGreater compares two version strings and returns true if VersionTarget > VersionCurrent
+func IsVersionTargetGreater(VersionCurrent, VersionTarget string) bool {
+	currentVerParts := strings.Split(VersionCurrent, ".")
+	targetVerParts := strings.Split(VersionTarget, ".")
+
+	// Compare each segment numerically
+	for i := 0; i < len(currentVerParts) && i < len(targetVerParts); i++ {
+		currentNum, err1 := strconv.Atoi(strings.TrimLeft(currentVerParts[i], "0"))
+		targetNum, err2 := strconv.Atoi(strings.TrimLeft(targetVerParts[i], "0"))
+
+		// Handle errors or empty segments as zero
+		if err1 != nil {
+			currentNum = 0
+		}
+		if err2 != nil {
+			targetNum = 0
+		}
+
+		if targetNum > currentNum {
+			return true
+		} else if targetNum < currentNum {
+			return false
+		}
+	}
+
+	// If all segments are equal up to the length of the shorter one, check remaining parts
+	return len(targetVerParts) > len(currentVerParts)
 }

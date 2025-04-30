@@ -16,8 +16,9 @@ The following attribute template can be used to configure this model:
 
 ```json
 {
-"attribute_1": <float>,
-"attribute_2": <string>
+  "prompt": <bool>,
+  "version_target": <string>,
+  "download_url": <string>
 }
 ```
 
@@ -25,23 +26,25 @@ The following attribute template can be used to configure this model:
 
 The following attributes are available for this model:
 
-| Name          | Type   | Inclusion | Description                |
-|---------------|--------|-----------|----------------------------|
-| `attribute_1` | float  | Required  | Description of attribute 1 |
-| `attribute_2` | string | Optional  | Description of attribute 2 |
+| Name             | Type   | Inclusion | Description                                            |
+|------------------|--------|-----------|--------------------------------------------------------|
+| `version_target` | string | Required  | Target version of Simrad SY50 to upgrade the system to |
+| `download_url`   | string | Required  | Download URL of the Simrad SY50 installer              |
+| `prompt`         | bool   | Optional  | Whether to prompt the user to install a new version    |
 
 #### Example Configuration
 
 ```json
 {
-  "attribute_1": 1.0,
-  "attribute_2": "foo"
+  "prompt": false,
+  "version_target": "24.7.9230.28743",
+  "download_url": "https://www.simrad.club/sy50/sy50_setup_24_7_3.zip"
 }
 ```
 
 ### DoCommand
 
-If your model implements DoCommand, provide an example payload of each command that is supported and the arguments that can be used. If your model does not implement DoCommand, remove this section.
+This module implements DoCommand, but the parameters are defined above. The `prompt` and `download_url` could move here.
 
 #### Example DoCommand
 
