@@ -5,10 +5,10 @@ go 1.23.8
 toolchain go1.24.2
 
 require (
+	github.com/Microsoft/go-winio v0.6.1
 	go.viam.com/rdk v0.73.0
 	go.viam.com/utils v0.1.141
 	golang.org/x/sys v0.32.0
-	gopkg.in/toast.v1 v1.0.0-20180812000517-0a84660828b2
 )
 
 require (
@@ -84,7 +84,6 @@ require (
 	github.com/miekg/dns v1.1.53 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/muhlemmer/gu v0.3.1 // indirect
-	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/pion/datachannel v1.5.8 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/ice/v2 v2.3.34 // indirect

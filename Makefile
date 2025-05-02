@@ -53,3 +53,6 @@ format:
 update-rdk:
 	go get go.viam.com/rdk@latest
 	go mod tidy
+
+viam-upload:
+	echo viam module upload --version "0.6.1" --platform "windows/amd64" .

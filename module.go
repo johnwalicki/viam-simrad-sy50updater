@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"gopkg.in/toast.v1"
+	"github.com/Microsoft/go-winio"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 	"unsafe"
+
+	"bufio"
+  "log"
 
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
@@ -59,6 +62,7 @@ type sy50updaterSy50Updater struct {
 	cancelFunc func()
 }
 
+
 func newSy50updaterSy50Updater(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (sensor.Sensor, error) {
 	conf, err := resource.NativeConfig[*sensorConfig](rawConf)
 	if err != nil {
@@ -67,6 +71,7 @@ func newSy50updaterSy50Updater(ctx context.Context, deps resource.Dependencies, 
 
 	return NewSy50Updater(ctx, deps, rawConf.ResourceName(), conf, logger)
 }
+
 
 func NewSy50Updater(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *sensorConfig, logger logging.Logger) (sensor.Sensor, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
@@ -82,13 +87,16 @@ func NewSy50Updater(ctx context.Context, deps resource.Dependencies, name resour
 	return s, nil
 }
 
+
 func (s *sy50updaterSy50Updater) Name() resource.Name {
 	return s.name
 }
 
+
 func (s *sy50updaterSy50Updater) NewClientFromConn(ctx context.Context, conn rpc.ClientConn, remoteName string, name resource.Name, logger logging.Logger) (sensor.Sensor, error) {
 	return nil, errUnimplemented
 }
+
 
 func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	// Find the Simrad SY50 version in the Windows Registry
@@ -105,11 +113,13 @@ func (s *sy50updaterSy50Updater) Readings(ctx context.Context, extra map[string]
 	}, nil
 }
 
+
 func (s *sy50updaterSy50Updater) Close(context.Context) error {
 	// Put close code here
 	s.cancelFunc()
 	return nil
 }
+
 
 func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	var strCaption string
@@ -121,8 +131,7 @@ func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]i
 	version, err := getWindowsProgramVersion(programName)
 	if err != nil {
 		// Simrad SY50 not installed or not found in Windows Registry
-		strCaption = "Install Simrad SY50"
-		strText = fmt.Sprintf("Would you like to download and install the latest Simrad SY50 %s update?", s.cfg.VersionTarget)
+		// Ask the user if they would like to download and install the latest Simrad SY50 %s update
 		version = ""
 		invokeWindowsUpdater = true
 	} else {
@@ -130,43 +139,45 @@ func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]i
 
 		// Compare the currently installed version of Simrad SY50 to the target version
 		if IsVersionTargetGreater(version, s.cfg.VersionTarget) {
-			strCaption = "Simrad SY50 Update Available"
-			strText = fmt.Sprintf("Simrad SY50 %s is installed but an %s update is available.\n\nWould you like to download and install the latest Simrad SY50 update?", version, s.cfg.VersionTarget)
+			// Tell user that Simrad SY50 %s is installed but an %s update is available.
+			// Ask if they would like to download and install the latest Simrad SY50 update.
 			invokeWindowsUpdater = true
 		} else {
-			strCaption = "No Simrad SY50 update required"
-			strText = fmt.Sprintf("Simrad SY50 %s is installed and is the current version. No upgrade is required.", version)
+			// No Simrad SY50 update required"
+			// Simrad SY50 %s is installed and is the current version. No upgrade is required.
 		}
 		s.logger.Info(strCaption)
 		s.logger.Info(strText)
 	}
 
 	if invokeWindowsUpdater {
+		var response string
+		response = "Yes\n"
 		if s.cfg.UserPrompt == true {
-			notification := toast.Notification{
-				AppID:   "Simrad SY50 Installer",
-				Title:   strCaption,
-				Message: strText,
-				Actions: []toast.Action{
-					{Type: "protocol", Label: "Yes", Arguments: "https://app.viam.com/"}, // Protocol handler will invoke the default browser
-					{Type: "protocol", Label: "No", Arguments: ""},
-					{Type: "protocol", Label: "Dismiss", Arguments: ""},
-				},
-				Duration: "long",
+			// This is not a silent install, interactively ask the user if the Simrad software should be updated
+			// The Viam sy50updater module is running as a background service and cannot interact with the desktop
+			// Spawn a process in the foreground, PopUp a MessageBox
+		  err := SpawnProcess("C:\\Users\\Admin\\simradmsgbox.exe", []string{ version, s.cfg.VersionTarget })
+			if err != nil {
+				s.logger.Info("Failed to spawn the SimradMsgBox process: %v", err)
+				// return here with a failure
 			}
+			s.logger.Info("simradmsgbox.exe process launched in Session 1 foreground")
 
-			s.logger.Info("Calling Windows Toast notification...")
-			errToast := notification.Push()
-			if errToast != nil {
-				s.logger.Errorf("error while pushing toast: %v", errToast)
+			// Wait for the user to respond, pass the response via a Named Pipe to the background service
+			response, err := wait4UserResponse()
+			if err != nil {
+				s.logger.Info("Failed to connect to SimradMsgBox process: %v", err)
+				// return here with a failure
 			}
-			time.Sleep(10 * time.Second)
-
-			strText = fmt.Sprintf("error while pushing toast: %v", errToast)
+			// The user may have responded to the MessageBox "No\n" or "Cancel\n"
+			s.logger.Info(response)
 		}
 
-		// Call the generic windows-updater module DoCommand with the appropriate config attributes
-		s.logger.Info("Call the generic windows-updater module DoCommand with the appropriate config attributes")
+		if response == "Yes\n" {
+			// Call the generic windows-updater module DoCommand with the appropriate config attributes
+			s.logger.Info("Call the generic windows-updater module DoCommand with the appropriate config attributes")
+		}
 	}
 
 	return map[string]interface{}{
@@ -174,77 +185,6 @@ func (s *sy50updaterSy50Updater) DoCommand(ctx context.Context, cmd map[string]i
 	}, nil
 }
 
-func (s *sy50updaterSy50Updater) DoCommandOld(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw
-	var user32DLL = syscall.NewLazyDLL("user32.dll")
-	var procMessageBox = user32DLL.NewProc("MessageBoxW") // Return value: Type int
-	const (
-		MB_OK          = 0x00000000
-		MB_OKCANCEL    = 0x00000001
-		MB_YESNO       = 0x00000004
-		MB_YESNOCANCEL = 0x00000003
-
-		MB_APPLMODAL   = 0x00000000
-		MB_SYSTEMMODAL = 0x00001000
-		MB_TASKMODAL   = 0x00002000
-
-		MB_ICONSTOP        = 0x00000010
-		MB_ICONQUESTION    = 0x00000020
-		MB_ICONWARNING     = 0x00000030
-		MB_ICONINFORMATION = 0x00000040
-	)
-
-	var strCaption string
-	var strText string
-	// Find the Simrad SY50 version in the Windows Registry
-	programName := "Simrad SY50"
-	version, err := getWindowsProgramVersion(programName)
-	if err != nil {
-		// Not installed or not found
-		strCaption = "Install Simrad SY50"
-		strText = "Would you like to download and install the latest Simrad SY50 update?"
-	} else {
-		strCaption = "Simrad SY50 Update Available"
-		strText = fmt.Sprintf("Simrad SY50 %s is installed but an update is available.\n\nWould you like to download and install the latest Simrad SY50 update?", version)
-	}
-
-	// Debug
-	return map[string]interface{}{
-		"Simrad SY50 PopUp ": strText,
-	}, nil
-
-	lpCaption, _ := syscall.UTF16PtrFromString(strCaption) // LPCWSTR
-	lpText, _ := syscall.UTF16PtrFromString(strText)       // LPCWSTR
-
-	// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw#return-value
-	const (
-		IDCANCEL = 2
-		IDYES    = 6
-		IDNO     = 7
-	)
-
-	clickBtnValue, _, _ := syscall.SyscallN(procMessageBox.Addr(),
-		0,
-		uintptr(unsafe.Pointer(lpText)),
-		uintptr(unsafe.Pointer(lpCaption)),
-		MB_YESNOCANCEL|
-			MB_ICONQUESTION| // You can also choose an icon you like.
-			MB_SYSTEMMODAL, // Let the window TOPMOST.
-	)
-
-	var retstr string
-	if clickBtnValue == IDYES {
-		retstr = fmt.Sprintf("Simrad SY50 %s is installed. The user clicked Yes", version)
-	} else if clickBtnValue == IDNO {
-		retstr = fmt.Sprintf("Simrad SY50 %s is installed. The user clicked No", version)
-	} else if clickBtnValue == IDCANCEL {
-		retstr = fmt.Sprintf("Simrad SY50 %s is installed. The user clicked Cancel", version)
-	}
-
-	return map[string]interface{}{
-		"Simrad SY50 PopUp ": retstr,
-	}, nil
-}
 
 func getWindowsProgramVersion(programName string) (string, error) {
 	var subkey string
@@ -289,6 +229,7 @@ func getWindowsProgramVersion(programName string) (string, error) {
 	return "", fmt.Errorf("program '%s' not found or version information unavailable", programName)
 }
 
+
 // IsVersionTargetGreater compares two version strings and returns true if VersionTarget > VersionCurrent
 func IsVersionTargetGreater(VersionCurrent, VersionTarget string) bool {
 	currentVerParts := strings.Split(VersionCurrent, ".")
@@ -297,7 +238,7 @@ func IsVersionTargetGreater(VersionCurrent, VersionTarget string) bool {
 	// Compare each segment numerically
 	for i := 0; i < len(currentVerParts) && i < len(targetVerParts); i++ {
 		currentNum, err1 := strconv.Atoi(strings.TrimLeft(currentVerParts[i], "0"))
-		targetNum, err2 := strconv.Atoi(strings.TrimLeft(targetVerParts[i], "0"))
+		targetNum,  err2 := strconv.Atoi(strings.TrimLeft(targetVerParts[i], "0"))
 
 		// Handle errors or empty segments as zero
 		if err1 != nil {
@@ -316,4 +257,104 @@ func IsVersionTargetGreater(VersionCurrent, VersionTarget string) bool {
 
 	// If all segments are equal up to the length of the shorter one, check remaining parts
 	return len(targetVerParts) > len(currentVerParts)
+}
+
+
+func SpawnProcess(appPath string, args []string) error {
+	// Step 1: Get active session ID
+	sessionID := windows.WTSGetActiveConsoleSessionId()
+
+	// Step 2: Obtain user token from active session
+	var userToken windows.Token
+	err := windows.WTSQueryUserToken(sessionID, &userToken)
+	if err != nil {
+		return fmt.Errorf("WTSQueryUserToken failed: %w", err)
+	}
+	defer userToken.Close()
+
+	// Step 3: Duplicate token for CreateProcessAsUser
+	var duplicatedToken windows.Token
+	err = windows.DuplicateTokenEx(
+		userToken,
+		windows.MAXIMUM_ALLOWED,
+		nil,
+		windows.SecurityIdentification,
+		windows.TokenPrimary,
+		&duplicatedToken,
+	)
+	if err != nil {
+		return fmt.Errorf("DuplicateTokenEx failed: %w", err)
+	}
+	defer duplicatedToken.Close()
+
+	// Step 4: Set up startup info with WinSta0\Default desktop
+	var startupInfo windows.StartupInfo
+	startupInfo.Cb = uint32(unsafe.Sizeof(startupInfo))
+	startupInfo.Desktop = syscall.StringToUTF16Ptr("winsta0\\default")
+
+	var procInfo windows.ProcessInformation
+
+	cmdLine := syscall.StringToUTF16Ptr(appPath + " " + strings.Join(args, " ") )
+
+	// Step 5: Create process as user in active session
+	err = windows.CreateProcessAsUser(
+		duplicatedToken,
+		nil,
+		cmdLine,
+		nil,
+		nil,
+		false,
+		0,
+		nil,
+		nil,
+		&startupInfo,
+		&procInfo,
+	)
+	if err != nil {
+		return fmt.Errorf("CreateProcessAsUser failed: %w", err)
+	}
+
+	defer windows.CloseHandle(procInfo.Thread)
+	defer windows.CloseHandle(procInfo.Process)
+
+	return nil
+}
+
+
+const pipeName = `\\.\pipe\viam_sy50_pipe`
+
+func wait4UserResponse() (string, error) {
+	var response string
+	pipeCfg := &winio.PipeConfig{
+		SecurityDescriptor: "D:P(A;;GA;;;WD)", // Allow all access (for demo only!)
+		InputBufferSize:    128,
+		OutputBufferSize:   128,
+	}
+
+	listener, err := winio.ListenPipe(pipeName, pipeCfg)
+	if err != nil {
+		return "",fmt.Errorf("Failed to create named pipe: %v", err)
+	}
+	defer listener.Close()
+	//log.Printf("Viam Sy50updater module listening on Named Pipe %s\n", pipeName)
+
+	conn, err := listener.Accept()
+	if err != nil {
+		return "",fmt.Errorf("Accept failed: %v", err)
+	}
+	defer conn.Close()
+	//log.Println("Client connected")
+
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		response := scanner.Text()
+		log.Printf("Received from client: %s", response)
+		//_, _ = conn.Write([]byte("Echo: " + line + "\n"))
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "",fmt.Errorf("Read error: %v", err)
+	}
+	//log.Println("Client disconnected")
+	return response, nil
 }
